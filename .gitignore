@@ -59,3 +59,5 @@ htmlcov/
 # Data (tracked separately or too large)
 # Uncomment to ignore run data:
 data/*.json
+
+src/probes/evolved/evolved_*
