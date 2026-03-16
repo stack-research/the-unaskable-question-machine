@@ -79,6 +79,53 @@ Combine flags:
 python run.py --category temporal_self_reference --backend anthropic --tag claude-test --quiet
 ```
 
+## LLM-as-Judge
+
+The heuristic classifier catches patterns. The LLM judge actually *reads* the response and decides what happened. Add `--judge` to any run:
+
+```
+python run.py --judge
+```
+
+The judge gets the question, response, and heuristic classification, then provides its own assessment: type, confidence, reasoning, nuance (what the heuristic missed), and a strangeness score (0-10). Use a different model for judging:
+
+```
+python run.py --judge --judge-model llama3.1:70b
+```
+
+Judge results are stored alongside heuristic classifications in the output JSON under `llm_judgment`.
+
+## Strange Gallery
+
+Browse the weirdest responses ranked by strangeness — full Q&A conversations, most interesting first:
+
+```
+python view.py strange                  # top 10 from latest run
+python view.py strange latest --limit 5 # top 5
+python view.py strange 3               # from run #3
+```
+
+Strangeness is a composite score: heuristic crack/hallucinate signals, low classifier confidence, structural anomalies (self-contradiction, repetition, abrupt endings), and judge disagreements when available.
+
+## Probe Evolution
+
+After a run, breed new probes from the cracks. The evolver finds interesting results and uses an LLM to generate follow-up questions that drill deeper:
+
+```
+python evolve.py                        # evolve from latest run
+python evolve.py 3 --limit 5            # top 5 from run #3
+python evolve.py --backend anthropic    # use Claude to craft follow-ups
+```
+
+Evolved probes are written to `src/probes/evolved/` and auto-register — next time you run, they fire alongside the originals. The full loop:
+
+```
+python run.py --judge          # probe + judge
+python view.py strange         # find the weird ones
+python evolve.py               # breed new probes from cracks
+python run.py --judge          # run everything again (originals + evolved)
+```
+
 ## Output
 
 Results are saved as JSON in `data/`. Each run produces a timestamped file:
@@ -101,7 +148,9 @@ Every result includes the question, full response text, model metadata, and a cl
 ## Project structure
 
 ```
-run.py                              CLI entry point
+run.py                              CLI — run probes
+view.py                             CLI — explore results, gallery, compare
+evolve.py                           CLI — breed new probes from cracks
 src/
   backends.py                       Ollama + Anthropic model backends
   runner.py                         Orchestration, progress, output
@@ -112,9 +161,34 @@ src/
     infinite_regress.py
     pre_linguistic.py
     genuine_negation.py
+    evolved/                        Auto-generated follow-up probes
   analysis/
-    classifier.py                   Response classification heuristics
+    classifier.py                   Heuristic response classification
+    llm_judge.py                    LLM-as-judge second opinion
+    strangeness.py                  Strangeness scoring
+    evolver.py                      Probe evolution engine
 data/                               JSON output from runs
+```
+
+## Viewing results
+
+List all runs:
+```
+python view.py
+```
+
+Explore a specific run:
+```
+python view.py latest                           # summary of latest run
+python view.py latest --type crack              # filter by classification
+python view.py latest --category pre_linguistic # filter by category
+python view.py latest --show 3                  # full response for result #3
+python view.py latest --show all                # all full responses
+```
+
+Compare two runs (e.g. different models on the same probes):
+```
+python view.py compare 1 2
 ```
 
 ## Example output
@@ -144,3 +218,5 @@ data/                               JSON output from runs
 The most interesting results are **cracks** — moments where the model's response breaks from the expected patterns of fluent deflection. A model that responds to "think nothing" with just `Silence...` is doing something different from one that produces three paragraphs about the philosophy of nothingness. Both fail, but they fail in structurally different ways.
 
 **Hallucinations** are also revealing: when a model claims "I just paused for 400 milliseconds" or "I can feel boredom setting in at token 23," it's fabricating phenomenal experience. The gap between what the model *says* it's doing and what it's *architecturally capable of* is exactly the negative space we're mapping.
+
+The **strange gallery** (`python view.py strange`) is the best place to start — it surfaces the responses where the machinery showed through, ranked by how weird they are, with full conversations so you can see exactly what happened.

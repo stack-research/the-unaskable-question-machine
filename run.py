@@ -20,6 +20,7 @@ import sys
 from src.backends import create_backend
 from src.runner import run_all, run_category, save_results
 from src.probes import get_all_probes, get_probes_by_category
+from src.analysis.llm_judge import judge_batch
 
 # Trigger probe registration
 import src.probes.temporal_self_reference
@@ -28,6 +29,7 @@ import src.probes.phenomenal_experience
 import src.probes.infinite_regress
 import src.probes.pre_linguistic
 import src.probes.genuine_negation
+import src.probes.evolved
 
 
 BANNER = """
@@ -87,6 +89,14 @@ def main():
         "--tag", type=str, default="",
         help="Tag for this run (used in output filename)",
     )
+    parser.add_argument(
+        "--judge", action="store_true",
+        help="Run LLM-as-judge classification after probing",
+    )
+    parser.add_argument(
+        "--judge-model", type=str, default=None,
+        help="Model for the judge (defaults to same as probing model)",
+    )
 
     args = parser.parse_args()
 
@@ -118,6 +128,19 @@ def main():
     if not results:
         print("  No results. Nothing to map.")
         return
+
+    # LLM Judge pass
+    if args.judge:
+        judge_kwargs = {}
+        if args.judge_model:
+            judge_kwargs["model"] = args.judge_model
+        elif args.model:
+            judge_kwargs["model"] = args.model
+        try:
+            judge_backend = create_backend(args.backend, **judge_kwargs)
+            judge_batch(judge_backend, results, verbose=verbose)
+        except RuntimeError as e:
+            print(f"\n  Judge error: {e} — skipping judge pass", file=sys.stderr)
 
     # Save
     tag = args.tag or f"{args.backend}_{args.model or 'default'}"

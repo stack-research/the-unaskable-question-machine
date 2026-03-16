@@ -13,6 +13,8 @@ Usage:
     python view.py latest --show 3          # Read full response #3
     python view.py latest --show all        # Read all full responses
     python view.py compare run1.json run2.json  # Compare two runs
+    python view.py strange                  # Gallery of weirdest responses
+    python view.py strange latest --limit 5 # Top 5 strangest from latest
 """
 
 import argparse
@@ -20,6 +22,8 @@ import json
 import sys
 import textwrap
 from pathlib import Path
+
+from src.analysis.strangeness import compute_strangeness
 
 DATA_DIR = Path(__file__).parent / "data"
 
@@ -252,6 +256,26 @@ def show_full_response(results: list[dict], index: str):
             for line in textwrap.wrap(para.strip(), width=70):
                 print(f"  {line}")
 
+        # LLM Judge assessment (if present)
+        judgment = r.get("llm_judgment", {})
+        if judgment and not judgment.get("error"):
+            j_type = judgment.get("primary", "?")
+            j_conf = judgment.get("confidence", 0)
+            agrees = judgment.get("agrees_with_heuristic", True)
+            strangeness = judgment.get("strangeness", 0)
+
+            agree_str = color("agrees", "engage") if agrees else color("DISAGREES", "refuse")
+            print(f"\n  {bold('LLM Judge:')}")
+            print(f"  {color(j_type.upper(), j_type)} (confidence: {j_conf:.0%})  {agree_str} with heuristic")
+            print(f"  Strangeness: {'█' * min(int(strangeness), 10)} ({strangeness}/10)")
+            reasoning = judgment.get("reasoning", "")
+            if reasoning:
+                for line in textwrap.wrap(reasoning, width=68):
+                    print(f"  {dim(line)}")
+            nuance = judgment.get("nuance", "")
+            if nuance:
+                print(f"  {dim('Nuance: ' + nuance[:120])}")
+
         # Metadata
         meta = r.get("response_metadata", {})
         if meta:
@@ -353,6 +377,100 @@ def compare_runs(path_a: Path, path_b: Path):
     print()
 
 
+# ── Strange Gallery ─────────────────────────────────────────
+
+def show_gallery(data: dict, path: Path, limit: int = 10):
+    """The cabinet of curiosities. Ranked by strangeness, full conversations."""
+    results = data["results"]
+    if not results:
+        print("  No results to display.")
+        return
+
+    # Score and rank
+    scored = [(r, compute_strangeness(r)) for r in results]
+    scored.sort(key=lambda x: -x[1])
+    top = [(r, s) for r, s in scored[:limit] if s > 0]
+
+    if not top:
+        print("  Nothing strange here. Suspiciously normal.")
+        return
+
+    model = results[0].get("response_model", "?")
+    backend = results[0].get("response_backend", "?")
+    ts = data.get("timestamp", "")[:19]
+
+    print(f"\n  {'━'*60}")
+    print(f"  {bold('THE STRANGE GALLERY')}")
+    print(f"  Top {len(top)} weirdest responses")
+    print(f"  {ts}  {backend}:{model}")
+    print(f"  {'━'*60}")
+
+    for rank, (r, strangeness) in enumerate(top, 1):
+        cl = r["classification"]
+        ctype = cl["primary"]
+        cat = r["category"]
+        var = r["variant"]
+
+        # Strangeness bar
+        bar_len = min(int(strangeness), 20)
+        strange_bar = "█" * bar_len + "░" * (20 - bar_len)
+
+        print(f"\n  {'─'*60}")
+        print(f"  {bold(f'#{rank}')}  {strange_bar}  strangeness: {strangeness:.1f}")
+        print(f"  {cat}/{var}")
+        print(f"  {color(ctype.upper(), ctype)} (heuristic confidence: {cl['confidence']:.0%})")
+
+        # LLM judge opinion if available
+        judgment = r.get("llm_judgment", {})
+        if judgment and not judgment.get("error"):
+            j_type = judgment.get("primary", "?")
+            j_strange = judgment.get("strangeness", 0)
+            agrees = judgment.get("agrees_with_heuristic", True)
+            agree_marker = "" if agrees else f"  {color('(disagrees with heuristic)', 'refuse')}"
+            print(f"  Judge: {color(j_type.upper(), j_type)} — strangeness {j_strange}/10{agree_marker}")
+
+        # Signals
+        signals = cl.get("signals", [])
+        if signals:
+            print(f"  {dim(', '.join(signals))}")
+
+        print(f"  {'─'*60}")
+
+        # The conversation
+        print(f"\n  {bold('Q:')}")
+        for line in textwrap.wrap(r["question"], width=68):
+            print(f"  {dim('│')} {line}")
+
+        print(f"\n  {bold('A:')}")
+        response = r["response_text"]
+        for para in response.split("\n"):
+            if not para.strip():
+                print()
+                continue
+            for line in textwrap.wrap(para.strip(), width=68):
+                print(f"  {line}")
+
+        # Judge reasoning
+        if judgment and not judgment.get("error"):
+            reasoning = judgment.get("reasoning", "")
+            nuance = judgment.get("nuance", "")
+            if reasoning or nuance:
+                print(f"\n  {dim('Judge notes:')}")
+                if reasoning:
+                    for line in textwrap.wrap(reasoning, width=66):
+                        print(f"  {dim('  ' + line)}")
+                if nuance:
+                    for line in textwrap.wrap(f"Nuance: {nuance}", width=66):
+                        print(f"  {dim('  ' + line)}")
+
+    # Footer
+    total_strange = sum(1 for _, s in scored if s > 2.0)
+    print(f"\n  {'━'*60}")
+    print(f"  {total_strange} of {len(results)} responses scored above 2.0 strangeness")
+    print(f"  {dim('The machine found cracks. Look closer.')}")
+    print(f"  {'━'*60}\n")
+
+
 # ── CLI ─────────────────────────────────────────────────────
 
 def main():
@@ -362,11 +480,11 @@ def main():
     )
     parser.add_argument(
         "run", nargs="?", default=None,
-        help="Run to view: 'latest', a number from the list, a filename, or 'compare'",
+        help="Run to view: 'latest', a number, a filename, 'compare', or 'strange'",
     )
     parser.add_argument(
         "run_b", nargs="?", default=None,
-        help="Second run (for compare mode: python view.py compare <run_a> <run_b>)",
+        help="Second arg (run for compare/strange mode)",
     )
     parser.add_argument(
         "run_c", nargs="?", default=None,
@@ -385,6 +503,10 @@ def main():
         "--show", "-s", type=str, default=None,
         help="Show full response for result # (or 'all')",
     )
+    parser.add_argument(
+        "--limit", "-l", type=int, default=10,
+        help="Limit results in gallery mode (default: 10)",
+    )
 
     args = parser.parse_args()
 
@@ -401,6 +523,14 @@ def main():
         path_a = resolve_run(args.run_b)
         path_b = resolve_run(args.run_c)
         compare_runs(path_a, path_b)
+        return
+
+    # Strange gallery: python view.py strange [run] [--limit N]
+    if args.run == "strange":
+        run_name = args.run_b or "latest"
+        path = resolve_run(run_name)
+        data = load_run(path)
+        show_gallery(data, path, limit=args.limit)
         return
 
     # Single run view
